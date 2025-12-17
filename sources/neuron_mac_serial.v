@@ -1,4 +1,4 @@
-`timescale 1ns/1ps
+'timescale 1ns/1ps
 module neuron_mac_serial #(
 	parameter integer NUM_INPUTS = 8,
 
