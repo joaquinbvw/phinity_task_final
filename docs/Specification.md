@@ -240,7 +240,7 @@ $$
 
   where "$\left\lfloor \cdot \right\rfloor$" denotes an appropriate fixed-point rounding or truncation.
 
-- **Hard-tanh–style clamp** (bounded interval in accumulator scale):
+- **Hard-tanh**–style clamp** (bounded interval in accumulator scale):
 
   In the real-valued formulation, the hard-tanh activation clamps the value to the interval $[-1, +1]$. In the accumulator's fixed-point representation (with fractional bits $F_p$), the integers corresponding to $-1$ and $+1$ are:
 
@@ -332,6 +332,14 @@ A multiplier instance must behave like a single in-flight operation engine:
 ### 3.4 Implementation Note (Non-Normative)
 
 A common way to implement a multi-cycle multiplier is a **shift-and-add** scheme over the multiplier operand bits, combined with sign handling (e.g., multiply magnitudes and apply the final sign). This is offered as intuition only; any method is allowed so long as Sections 3.1–3.3 are satisfied.
+
+### 3.5 Reset Interaction (Conceptual)
+
+If the multiplier has a reset input, then when reset is asserted it must return to an idle state:
+
+- any in-flight operation is canceled,
+- output-valid is deasserted (no pending result),
+- the multiplier presents itself as ready to accept a new input pair once reset is deasserted (optionally immediately, or within one clock cycle depending on the surrounding system’s conventions).
 
 ---
 
@@ -472,5 +480,48 @@ A compliant implementation, following this conceptual model, must:
    - leaky ReLU (scale negative values by a fixed factor $\alpha \in (0,1)$, often a reciprocal power of two in fixed-point), or
    - hard-tanh–style clamp to a bounded interval (e.g. the integers corresponding to $[-1, +1]$ in the accumulator scale).
 7. Quantize from the accumulator's fractional scale to the output's fractional scale using the same shift-and-round rule for right shifts, then saturate the result to the signed output range representable by the chosen output width.
+8. Follow a ready/valid-style transactional contract for accepting a new neuron operation and for producing/retiring the output result (including holding the output stable while output-valid is asserted and the receiver is not ready).
+9. If a reset input exists, ensure reset returns the design to an idle state (no pending output-valid, no partial/in-flight operation), ready to begin a fresh transaction after reset is deasserted.
 
 Additionally, if a dedicated sequential signed multiplier submodule is used, it must satisfy the functional contract in Section 3 (exact signed product at width $A_W+B_W$, multi-cycle allowed, transactional accept/produce behavior, and stable output while pending acceptance).
+
+---
+
+## 7. Handshake and Reset Contract (Top-Level Transaction Semantics)
+
+This section defines the *behavioral* contract for control/flow signals and reset at the module boundary, without prescribing internal micro-architecture or fixed latency.
+
+### 7.1 Transaction Boundaries
+
+A neuron computation is treated as one **operation** (one full dot-product over $N$ inputs, plus bias, activation, output quantization, and saturation).
+
+- **Input acceptance:** An operation is accepted only on a clock edge where the module’s input-valid and input-ready are both asserted (a standard ready/valid handshake).
+- **Output acceptance:** An output is considered consumed only on a clock edge where the module’s output-valid and output-ready are both asserted.
+
+The exact signal names are defined by the module interface, but the semantics must match this ready/valid contract.
+
+### 7.2 Single In-Flight Operation
+
+Unless explicitly stated otherwise by the module interface, the top-level neuron MAC behaves like a single in-flight engine:
+
+- It must not accept a second operation if it already has an unconsumed output pending.
+- It may deassert input-ready while busy computing, and/or while waiting for the prior output to be accepted.
+
+### 7.3 Output Hold Requirement
+
+When output-valid is asserted but the receiver is not ready to accept the result:
+
+- the output value (and any related output-sideband signals, if present) must remain stable,
+- output-valid must remain asserted until the result is accepted.
+
+This ensures the environment can throttle output consumption without losing correctness.
+
+### 7.4 Reset Behavior (Conceptual)
+
+If the top-level module has a reset input, then when reset is asserted it must return to a clean idle state:
+
+- cancel any in-progress operation,
+- deassert output-valid (no pending output),
+- after reset is deasserted, allow a fresh operation to be accepted according to the input handshake (optionally immediately, or within one clock cycle depending on surrounding system conventions).
+
+No partial results from operations started before reset may appear after reset is asserted.
