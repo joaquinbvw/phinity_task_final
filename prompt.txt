@@ -28,10 +28,7 @@ The signal 'in_ready' must be high exactly when the block is idle and able to ac
 
 While 'busy' remains high, the block walks through all indices in order and updates the accumulator according to the mask. For masked-off elements it should simply advance to the next index. For masked-on elements it must obtain the product through a sequential signed multiplier submodule that can take one or more cycles: the top-level must only launch a multiply when the multiplier is ready, and it must wait until the multiplier produces a valid product before adding it into the accumulator and advancing. Only one multiply operation may be in flight at a time.
 
-When the final result is ready, the module must drive the result on 'out_data' and assert 'out_valid'. Unlike a one-cycle pulse interface, 'out_valid' must support backpressure using 'out_ready':
-- If 'out_ready' is high, the result is accepted on that cycle.
-- If 'out_ready' is low, 'out_valid' must remain asserted until 'out_ready' eventually becomes high, and 'out_data' must remain stable for the entire time 'out_valid' is high and 'out_ready' is low.
-- While an output is pending acceptance ('out_valid'=1 and 'out_ready'=0), the block is still considered busy: keep 'busy'=1 and keep 'in_ready' low so that no new operation can be accepted.
+When the final result is ready, the module must drive the result on 'out_data' and assert 'out_valid' to indicate a valid output is present. For this task, you may assume 'out_ready' is asserted (no backpressure behavior is required). After producing the result, the block should return to the idle state and be able to accept a new operation.
 
 The reset input 'rst_n' is active-low and asynchronous. While 'rst_n' is low, the design must clear all internal registers, force 'busy' and 'out_valid' to zero, and set 'out_data' to zero. After 'rst_n' returns high, the block is idle and ready to accept a new operation, with 'in_ready' high until the first transaction is started.
 
@@ -70,7 +67,7 @@ module neuron_mac_serial #(
 	// Sparsity mask
 	input  wire        [NUM_INPUTS-1:0] mask_flat,
 
-	// Output handshake with backpressure
+	// Output handshake (out_ready is provided but backpressure behavior is not required)
 	output reg                          out_valid,
 	input  wire                         out_ready,
 	output reg  signed [OUT_W-1:0]      out_data,
