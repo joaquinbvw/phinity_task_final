@@ -1,4 +1,4 @@
-timescale 1ns/1ps
+`timescale 1ns/1ps
 // ============================================================
 // neuron_mac_serial.v  (Verilog-2001)
 // Serial dot-product neuron: y = sum(mask[i] ? x[i]*w[i] : 0) + bias
