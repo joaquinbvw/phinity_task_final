@@ -3,6 +3,10 @@
 // neuron_mac_serial.v  (Verilog-2001)
 // Serial dot-product neuron: y = sum(mask[i] ? x[i]*w[i] : 0) + bias
 // Fixed-point with rounding + saturation, runtime-selectable activation.
+//
+// Updates:
+//   - out_ready backpressure: out_valid holds until out_ready
+//   - multiplication moved to a sequential multiplier module with handshake
 // ============================================================
 
 module neuron_mac_serial #(
@@ -33,18 +37,17 @@ module neuron_mac_serial #(
     input  wire        [NUM_INPUTS*X_W-1:0] x_flat,
     input  wire        [NUM_INPUTS*W_W-1:0] w_flat,
 
-    // New: runtime-selectable activation function
-    //   act_sel = 2'b00 : identity (no non-linearity)
-    //   act_sel = 2'b01 : ReLU
-    //   act_sel = 2'b10 : leaky ReLU (slope 1/4 for negative)
-    //   act_sel = 2'b11 : hard-tanh style clamp to [-1.0, +1.0] in FRAC_P scale
+    // Runtime-selectable activation function
     input  wire        [1:0]            act_sel,
 
-    // New: sparsity mask (one bit per input element, 1 = use x[i]*w[i], 0 = skip)
+    // Sparsity mask (one bit per input element, 1 = use x[i]*w[i], 0 = skip)
     input  wire        [NUM_INPUTS-1:0] mask_flat,
 
-    // Output handshake: out_valid pulses for 1 cycle with out_data.
+    // Output handshake with backpressure:
+    //   out_valid remains asserted until out_ready is high for a cycle
+    //   while out_valid is high, out_data must remain stable
     output reg                          out_valid,
+    input  wire                         out_ready,
     output reg  signed [OUT_W-1:0]      out_data,
 
     output reg                          busy
@@ -216,65 +219,170 @@ module neuron_mac_serial #(
     wire                   mask_i;
 
     // Dynamic part-select: x[i], w[i], mask[i]
-    assign x_i   = $signed(x_reg[idx*X_W +: X_W]);
-    assign w_i   = $signed(w_reg[idx*W_W +: W_W]);
+    assign x_i    = $signed(x_reg[idx*X_W +: X_W]);
+    assign w_i    = $signed(w_reg[idx*W_W +: W_W]);
     assign mask_i = mask_reg[idx];
 
-    // Product and masked version in accumulator width
-    wire signed [PROD_W-1:0] prod        = x_i * w_i;
-    wire signed [ACC_W-1:0]  prod_acc    = prod;  // sign-extend
-    wire signed [ACC_W-1:0]  masked_prod = mask_i ? prod_acc
-                                                 : {ACC_W{1'b0}};
-    wire signed [ACC_W-1:0]  acc_next    = acc + masked_prod;
+    // -------------------------
+    // Sequential multiplier (separate module)
+    // -------------------------
+    reg                        mul_in_valid;
+    wire                       mul_in_ready;
+    reg  signed [X_W-1:0]       mul_a;
+    reg  signed [W_W-1:0]       mul_b;
 
-    // Ready is simply the complement of busy (combinational)
-    assign in_ready = ~busy;
+    wire                       mul_out_valid;
+    wire signed [PROD_W-1:0]    mul_p;
+
+    // Always consume multiplier outputs immediately
+    wire mul_out_ready = 1'b1;
+
+    seq_mult_signed #(
+        .A_W(X_W),
+        .B_W(W_W)
+    ) u_seq_mult_signed (
+        .clk       (clk),
+        .rst_n     (rst_n),
+        .in_valid  (mul_in_valid),
+        .in_ready  (mul_in_ready),
+        .a         (mul_a),
+        .b         (mul_b),
+        .out_valid (mul_out_valid),
+        .out_ready (mul_out_ready),
+        .p         (mul_p)
+    );
+
+    // Sign-extend product into accumulator width
+    wire signed [ACC_W-1:0] mul_p_acc = mul_p;
+
+    // -------------------------
+    // Control / sequencing (explicit ready/valid output holding)
+    // -------------------------
+    localparam [1:0] ST_IDLE = 2'd0;
+    localparam [1:0] ST_ELEM = 2'd1;
+    localparam [1:0] ST_WAIT = 2'd2;
+    localparam [1:0] ST_OUT  = 2'd3;
+
+    reg [1:0] state;
+
+    // Ready only when truly idle (no compute and no pending output)
+    assign in_ready = (state == ST_IDLE);
 
     // -------------------------
     // Main sequential logic
     // -------------------------
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            busy       <= 1'b0;
-            out_valid  <= 1'b0;
-            out_data   <= {OUT_W{1'b0}};
-            x_reg      <= {NUM_INPUTS*X_W{1'b0}};
-            w_reg      <= {NUM_INPUTS*W_W{1'b0}};
-            mask_reg   <= {NUM_INPUTS{1'b0}};
-            act_sel_reg<= 2'b00;
-            acc        <= {ACC_W{1'b0}};
-            idx        <= {CNT_W{1'b0}};
+            state       <= ST_IDLE;
+            busy        <= 1'b0;
+
+            out_valid   <= 1'b0;
+            out_data    <= {OUT_W{1'b0}};
+
+            x_reg       <= {NUM_INPUTS*X_W{1'b0}};
+            w_reg       <= {NUM_INPUTS*W_W{1'b0}};
+            mask_reg    <= {NUM_INPUTS{1'b0}};
+            act_sel_reg <= 2'b00;
+
+            acc         <= {ACC_W{1'b0}};
+            idx         <= {CNT_W{1'b0}};
+
+            mul_in_valid<= 1'b0;
+            mul_a       <= {X_W{1'b0}};
+            mul_b       <= {W_W{1'b0}};
         end else begin
-            // out_valid is a one-cycle pulse
-            out_valid <= 1'b0;
+            // default: only pulse mul_in_valid when starting a multiply
+            mul_in_valid <= 1'b0;
 
-            // Accept a new operation only when idle and in_valid is high
-            if (in_valid && in_ready) begin
-                busy        <= 1'b1;
-                idx         <= {CNT_W{1'b0}};
-
-                // Latch full input vectors (element 0 in LSBs) and mask/activation
-                x_reg       <= x_flat;
-                w_reg       <= w_flat;
-                mask_reg    <= mask_flat;
-                act_sel_reg <= act_sel;
-
-                // Initialize accumulator with aligned bias (FRAC_P scale)
-                acc         <= align_bias(bias);
-            end
-            else if (busy) begin
-                // Consume one (possibly masked) x/w pair per cycle in index order
-                acc <= acc_next;
-
-                if (idx == (NUM_INPUTS-1)) begin
-                    // Last element: produce result and return to idle
+            case (state)
+                // -----------------
+                // IDLE: accept new op
+                // -----------------
+                ST_IDLE: begin
                     busy      <= 1'b0;
-                    out_valid <= 1'b1;
-                    out_data  <= quantize_and_sat(acc_next, act_sel_reg);
-                end else begin
-                    idx <= idx + 1'b1;
+                    out_valid <= 1'b0; // no pending output in IDLE
+
+                    if (in_valid) begin
+                        busy        <= 1'b1;
+                        state       <= ST_ELEM;
+                        idx         <= {CNT_W{1'b0}};
+
+                        x_reg       <= x_flat;
+                        w_reg       <= w_flat;
+                        mask_reg    <= mask_flat;
+                        act_sel_reg <= act_sel;
+
+                        acc         <= align_bias(bias);
+                    end
                 end
-            end
+
+                // -----------------
+                // ST_ELEM: decide current element
+                // -----------------
+                ST_ELEM: begin
+                    busy <= 1'b1;
+
+                    if (!mask_i) begin
+                        // skip this element
+                        if (idx == (NUM_INPUTS-1)) begin
+                            // finished -> produce output and HOLD it
+                            out_data  <= quantize_and_sat(acc, act_sel_reg);
+                            out_valid <= 1'b1;
+                            state     <= ST_OUT;
+                        end else begin
+                            idx <= idx + 1'b1;
+                        end
+                    end else begin
+                        // need multiply for this element
+                        if (mul_in_ready) begin
+                            mul_a        <= x_i;
+                            mul_b        <= w_i;
+                            mul_in_valid <= 1'b1;   // one-cycle pulse
+                            state        <= ST_WAIT;
+                        end
+                    end
+                end
+
+                // -----------------
+                // ST_WAIT: wait for multiplier result
+                // -----------------
+                ST_WAIT: begin
+                    busy <= 1'b1;
+
+                    if (mul_out_valid) begin
+                        if (idx == (NUM_INPUTS-1)) begin
+                            // last element: accumulate and produce output and HOLD it
+                            acc       <= acc + mul_p_acc;
+                            out_data  <= quantize_and_sat(acc + mul_p_acc, act_sel_reg);
+                            out_valid <= 1'b1;
+                            state     <= ST_OUT;
+                        end else begin
+                            acc   <= acc + mul_p_acc;
+                            idx   <= idx + 1'b1;
+                            state <= ST_ELEM;
+                        end
+                    end
+                end
+
+                // -----------------
+                // ST_OUT: hold out_valid + out_data until out_ready
+                // -----------------
+                ST_OUT: begin
+                    busy <= 1'b1;
+                    // out_valid and out_data must remain stable here until accepted
+                    if (out_ready) begin
+                        out_valid <= 1'b0;
+                        busy      <= 1'b0;
+                        state     <= ST_IDLE;
+                    end
+                end
+
+                default: begin
+                    state <= ST_IDLE;
+                    busy  <= 1'b0;
+                    out_valid <= 1'b0;
+                end
+            endcase
         end
     end
 
