@@ -20,16 +20,24 @@ The inputs are presented as packed vectors and must be unpacked consistently:
 - 'x_flat' contains NUM_INPUTS signed X_W-bit samples in little-endian order by index, so element zero is in the least significant bits and element i is taken from the slice 'i*X_W +: X_W'.
 - 'w_flat' is packed in the same way for the weights.
 - 'mask_flat' holds one bit per element; a value of one means "include this product in the sum", and a value of zero means "ignore this product".
-The computation is serial: element zero is processed first, then one, and so on up to NUM_INPUTS minus one, with exactly one element handled on each clock while the block is busy.
+The computation is serial: element zero is processed first, then one, and so on up to NUM_INPUTS minus one. If a mask bit is zero, that element is skipped immediately; if a mask bit is one, that element uses a dedicated sequential multiplier and may therefore take additional cycles before the accumulator is updated.
 
 Handshake, timing and reset
-The control interface uses a simple valid-ready style protocol. The signal 'in_ready' must be high exactly when the block is idle, which in this design means it is the logical negation of 'busy'. A new operation begins on a rising clock edge when both 'in_valid' and 'in_ready' are high at the same time. On that edge the design should capture 'x_flat', 'w_flat', 'bias', 'mask_flat' and 'act_sel', reset its internal element index, initialize the accumulator with the aligned bias, assert 'busy', and then start consuming one element per cycle. While 'busy' remains high, the block walks through all indices in order and updates the accumulator according to the mask. On the cycle that processes the last index, it finishes the accumulation, applies the selected activation, performs the final fixed-point conversion and saturation, drives the result on 'out_data', raises 'out_valid' for exactly one clock cycle, and then clears 'busy' so that 'in_ready' becomes high again.
+The control interface uses a simple valid-ready style protocol.
+The signal 'in_ready' must be high exactly when the block is idle and able to accept a new operation. A new operation begins on a rising clock edge when both 'in_valid' and 'in_ready' are high at the same time. On that edge the design should capture 'x_flat', 'w_flat', 'bias', 'mask_flat' and 'act_sel', reset its internal element index, initialize the accumulator with the aligned bias, assert 'busy', and then start walking through the elements in order.
+
+While 'busy' remains high, the block walks through all indices in order and updates the accumulator according to the mask. For masked-off elements it should simply advance to the next index. For masked-on elements it must obtain the product through a sequential signed multiplier submodule that can take one or more cycles: the top-level must only launch a multiply when the multiplier is ready, and it must wait until the multiplier produces a valid product before adding it into the accumulator and advancing. Only one multiply operation may be in flight at a time.
+
+When the final result is ready, the module must drive the result on 'out_data' and assert 'out_valid'. Unlike a one-cycle pulse interface, 'out_valid' must support backpressure using 'out_ready':
+- If 'out_ready' is high, the result is accepted on that cycle.
+- If 'out_ready' is low, 'out_valid' must remain asserted until 'out_ready' eventually becomes high, and 'out_data' must remain stable for the entire time 'out_valid' is high and 'out_ready' is low.
+- While an output is pending acceptance ('out_valid'=1 and 'out_ready'=0), the block is still considered busy: keep 'busy'=1 and keep 'in_ready' low so that no new operation can be accepted.
 
 The reset input 'rst_n' is active-low and asynchronous. While 'rst_n' is low, the design must clear all internal registers, force 'busy' and 'out_valid' to zero, and set 'out_data' to zero. After 'rst_n' returns high, the block is idle and ready to accept a new operation, with 'in_ready' high until the first transaction is started.
 
 Partial RTL to complete:
 
-'timescale 1ns/1ps
+`timescale 1ns/1ps
 module neuron_mac_serial #(
 	parameter integer NUM_INPUTS = 8,
 
@@ -62,8 +70,9 @@ module neuron_mac_serial #(
 	// Sparsity mask
 	input  wire        [NUM_INPUTS-1:0] mask_flat,
 
-	// Output handshake
+	// Output handshake with backpressure
 	output reg                          out_valid,
+	input  wire                         out_ready,
 	output reg  signed [OUT_W-1:0]      out_data,
 
 	output reg                          busy
