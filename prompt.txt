@@ -1,7 +1,7 @@
 Code completion task:
 
 Complete the Verilog RTL for 'neuron_mac_serial' using the conceptual description in '/workdir/docs/Specification.md'.
-The RTL must be synthesizable and work with Icarus Verilog (no SystemVerilog-only features). The multiplication operation will be performed by a separate module called seq_mult_signed.v that has to be instantiated in the top file neuron_mac_serial.v.
+The RTL must be synthesizable and work with Icarus Verilog (no SystemVerilog-only features). The multiplication operation will be performed by a separate module called seq_mult_signed.v that has to be instantiated in the top file neuron_mac_serial.v and the file needs to be located on the same sources directory as the neuron_mac_serial.v file.
 
 High-level behavior (see the spec for the exact math)
 This block behaves as a fixed-point neuron with masking and a selectable activation function. For each operation it should:
