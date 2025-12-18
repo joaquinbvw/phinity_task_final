@@ -1,7 +1,7 @@
 Code completion task:
 
 Complete the Verilog RTL for 'neuron_mac_serial' using the conceptual description in '/workdir/docs/Specification.md'.
-The RTL must be synthesizable and work with Icarus Verilog (no SystemVerilog-only features). The multiplication operation will be performed by a separate module called seq_mult_signed.v that has to be instantiated in the top file neuron_mac_serial.v. The environment may run strict lint/sim flows; avoid unused signals and width truncation warnings where possible. (If you absolutely must silence an intentional warning in Verilator, it supports in-source lint pragmas like /* verilator lint_off <WARN> */ … /* verilator lint_on <WARN> */.)
+The RTL must be synthesizable and work with Icarus Verilog (no SystemVerilog-only features). The multiplication operation will be performed by a separate module called seq_mult_signed.v that has to be instantiated in the top file neuron_mac_serial.v.
 
 High-level behavior (see the spec for the exact math)
 This block behaves as a fixed-point neuron with masking and a selectable activation function. For each operation it should:
@@ -31,7 +31,7 @@ When the final result is ready, the module must drive the result on 'out_data' a
 
 The reset input 'rst_n' is active-low and asynchronous. While 'rst_n' is low, the design must clear all internal registers, force 'busy' and 'out_valid' to zero, and set 'out_data' to zero. After 'rst_n' returns high, the block is idle and ready to accept a new operation, with 'in_ready' high until the first transaction is started.
 
-Output backpressure is NOT exercised in this task, you may assume out_ready is asserted whenever out_valid is asserted. Therefore, you do NOT need to implement "hold out_valid/out_data stable while out_ready=0" behavior for the TOP module (even if you see generic ready/valid wording elsewhere).
+Output backpressure is not exercised in this task, you may assume out_ready is asserted whenever out_valid is asserted. Therefore, you do not need to implement "hold out_valid/out_data stable while out_ready=0" behavior for the TOP module (even if you see generic ready/valid wording elsewhere).
 
 Partial RTL to complete:
 
