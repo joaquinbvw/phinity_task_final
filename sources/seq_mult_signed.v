@@ -49,8 +49,8 @@ module seq_mult_signed #(
     reg                  busy;
     reg                  sign;
 
-    reg [A_W-1:0]         mag_a;
-    reg [B_W-1:0]         mag_b;
+    //reg [A_W-1:0]         mag_a;
+    //reg [B_W-1:0]         mag_b;
 
     reg [P_W-1:0]         mcand;
     reg [B_W-1:0]         mult;
@@ -74,8 +74,8 @@ module seq_mult_signed #(
             p        <= {P_W{1'b0}};
 
             sign     <= 1'b0;
-            mag_a    <= {A_W{1'b0}};
-            mag_b    <= {B_W{1'b0}};
+            //mag_a    <= {A_W{1'b0}};
+            //mag_b    <= {B_W{1'b0}};
             mcand    <= {P_W{1'b0}};
             mult     <= {B_W{1'b0}};
             acc      <= {P_W{1'b0}};
@@ -92,8 +92,8 @@ module seq_mult_signed #(
 
                 // Determine sign and magnitudes
                 sign  <= a[A_W-1] ^ b[B_W-1];
-                mag_a <= a[A_W-1] ? (~a + {{(A_W-1){1'b0}},1'b1}) : a;
-                mag_b <= b[B_W-1] ? (~b + {{(B_W-1){1'b0}},1'b1}) : b;
+                //mag_a <= a[A_W-1] ? (~a + {{(A_W-1){1'b0}},1'b1}) : a;
+                //mag_b <= b[B_W-1] ? (~b + {{(B_W-1){1'b0}},1'b1}) : b;
 
                 // Initialize shift-add datapath
                 mcand   <= {{(P_W-A_W){1'b0}}, (a[A_W-1] ? (~a + {{(A_W-1){1'b0}},1'b1}) : a)};
@@ -126,3 +126,4 @@ module seq_mult_signed #(
     end
 
 endmodule
+
