@@ -1,7 +1,7 @@
 Code completion task:
 
 Complete the Verilog RTL for 'neuron_mac_serial' using the conceptual description in '/workdir/docs/Specification.md'.
-The RTL must be synthesizable and work with Icarus Verilog (no SystemVerilog-only features).
+The RTL must be synthesizable and work with Icarus Verilog (no SystemVerilog-only features). The multiplication operation will be performed by a separate module called seq_mult_signed.v that has to be instantiated in the top file neuron_mac_serial.v. The environment may run strict lint/sim flows; avoid unused signals and width truncation warnings where possible. (If you absolutely must silence an intentional warning in Verilator, it supports in-source lint pragmas like /* verilator lint_off <WARN> */ … /* verilator lint_on <WARN> */.)
 
 High-level behavior (see the spec for the exact math)
 This block behaves as a fixed-point neuron with masking and a selectable activation function. For each operation it should:
@@ -23,14 +23,15 @@ The inputs are presented as packed vectors and must be unpacked consistently:
 The computation is serial: element zero is processed first, then one, and so on up to NUM_INPUTS minus one. If a mask bit is zero, that element is skipped immediately; if a mask bit is one, that element uses a dedicated sequential multiplier and may therefore take additional cycles before the accumulator is updated.
 
 Handshake, timing and reset
-The control interface uses a simple valid-ready style protocol.
 The signal 'in_ready' must be high exactly when the block is idle and able to accept a new operation. A new operation begins on a rising clock edge when both 'in_valid' and 'in_ready' are high at the same time. On that edge the design should capture 'x_flat', 'w_flat', 'bias', 'mask_flat' and 'act_sel', reset its internal element index, initialize the accumulator with the aligned bias, assert 'busy', and then start walking through the elements in order.
 
-While 'busy' remains high, the block walks through all indices in order and updates the accumulator according to the mask. For masked-off elements it should simply advance to the next index. For masked-on elements it must obtain the product through a sequential signed multiplier submodule that can take one or more cycles: the top-level must only launch a multiply when the multiplier is ready, and it must wait until the multiplier produces a valid product before adding it into the accumulator and advancing. Only one multiply operation may be in flight at a time.
+While 'busy' remains high, the block walks through all indices in order and updates the accumulator according to the mask. For masked-off elements it should simply advance to the next index. For masked-on elements it must obtain the product through a sequential signed multiplier submodule called seq_mult_signed.v that can take one or more cycles: the top-level must only launch a multiply when the multiplier is ready, and it must wait until the multiplier produces a valid product before adding it into the accumulator and advancing. Only one multiply operation may be in flight at a time.
 
 When the final result is ready, the module must drive the result on 'out_data' and assert 'out_valid' to indicate a valid output is present. For this task, you may assume 'out_ready' is asserted (no backpressure behavior is required). After producing the result, the block should return to the idle state and be able to accept a new operation.
 
 The reset input 'rst_n' is active-low and asynchronous. While 'rst_n' is low, the design must clear all internal registers, force 'busy' and 'out_valid' to zero, and set 'out_data' to zero. After 'rst_n' returns high, the block is idle and ready to accept a new operation, with 'in_ready' high until the first transaction is started.
+
+Output backpressure is NOT exercised in this task, you may assume out_ready is asserted whenever out_valid is asserted. Therefore, you do NOT need to implement "hold out_valid/out_data stable while out_ready=0" behavior for the TOP module (even if you see generic ready/valid wording elsewhere).
 
 Partial RTL to complete:
 
