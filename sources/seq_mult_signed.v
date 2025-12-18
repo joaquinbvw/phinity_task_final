@@ -45,6 +45,7 @@ module seq_mult_signed #(
 
     localparam integer P_W   = A_W + B_W;
     localparam integer CNT_W = (B_W <= 1) ? 1 : clog2(B_W);
+    localparam [CNT_W-1:0] LAST = B_W-1;
 
     reg                  busy;
     reg                  sign;
@@ -107,7 +108,7 @@ module seq_mult_signed #(
                 mcand <= (mcand << 1);
                 mult  <= (mult >> 1);
 
-                if (bit_cnt == (B_W-1)) begin
+                if (bit_cnt == LAST) begin
                     // Done: form signed product and present output
                     busy <= 1'b0;
 
@@ -126,4 +127,5 @@ module seq_mult_signed #(
     end
 
 endmodule
+
 
