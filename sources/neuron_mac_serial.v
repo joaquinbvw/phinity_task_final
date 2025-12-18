@@ -33,9 +33,6 @@ module neuron_mac_serial #(
     // Sparsity mask (one bit per input element, 1 = use x[i]*w[i], 0 = skip)
     input  wire        [NUM_INPUTS-1:0] mask_flat,
 
-    // Output handshake with backpressure:
-    //   out_valid remains asserted until out_ready is high for a cycle
-    //   while out_valid is high, out_data must remain stable
     output reg                          out_valid,
     input  wire                         out_ready,
     output reg  signed [OUT_W-1:0]      out_data,
