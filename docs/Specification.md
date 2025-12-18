@@ -480,48 +480,25 @@ A compliant implementation, following this conceptual model, must:
    - leaky ReLU (scale negative values by a fixed factor $\alpha \in (0,1)$, often a reciprocal power of two in fixed-point), or
    - hard-tanh–style clamp to a bounded interval (e.g. the integers corresponding to $[-1, +1]$ in the accumulator scale).
 7. Quantize from the accumulator's fractional scale to the output's fractional scale using the same shift-and-round rule for right shifts, then saturate the result to the signed output range representable by the chosen output width.
-8. Follow a ready/valid-style transactional contract for accepting a new neuron operation and for producing/retiring the output result (including holding the output stable while output-valid is asserted and the receiver is not ready).
+8. Output handshake: `out_valid` indicates a valid output sample. For this task environment, you may assume `out_ready` is asserted whenever `out_valid` is asserted (i.e., output backpressure is not exercised), so an explicit "hold output stable while `out_ready=0`" requirement is out of scope for this task.
 9. If a reset input exists, ensure reset returns the design to an idle state (no pending output-valid, no partial/in-flight operation), ready to begin a fresh transaction after reset is deasserted.
 
 Additionally, if a dedicated sequential signed multiplier submodule is used, it must satisfy the functional contract in Section 3 (exact signed product at width $A_W+B_W$, multi-cycle allowed, transactional accept/produce behavior, and stable output while pending acceptance).
 
 ---
 
-## 7. Handshake and Reset Contract (Top-Level Transaction Semantics)
+## 7. Handshake and Reset Contract
 
-This section defines the *behavioral* contract for control/flow signals and reset at the module boundary, without prescribing internal micro-architecture or fixed latency.
+This task uses a ready/valid style interface for inputs and outputs.
 
-### 7.1 Transaction Boundaries
+### 7.1 Input (in_valid / in_ready)
+A new transaction is accepted when `in_valid && in_ready` is true on a rising clock edge. The design must only capture inputs on that handshake.
 
-A neuron computation is treated as one **operation** (one full dot-product over $N$ inputs, plus bias, activation, output quantization, and saturation).
+### 7.2 Output (out_valid / out_ready)
+`out_valid` indicates that `out_data` is valid.
 
-- **Input acceptance:** An operation is accepted only on a clock edge where the module’s input-valid and input-ready are both asserted (a standard ready/valid handshake).
-- **Output acceptance:** An output is considered consumed only on a clock edge where the module’s output-valid and output-ready are both asserted.
+**Task constraint:** The evaluation environment assumes `out_ready` is asserted whenever `out_valid` is asserted. Output backpressure is not exercised in this task, and behavior when `out_ready=0` is not graded.
 
-The exact signal names are defined by the module interface, but the semantics must match this ready/valid contract.
-
-### 7.2 Single In-Flight Operation
-
-Unless explicitly stated otherwise by the module interface, the top-level neuron MAC behaves like a single in-flight engine:
-
-- It must not accept a second operation if it already has an unconsumed output pending.
-- It may deassert input-ready while busy computing, and/or while waiting for the prior output to be accepted.
-
-### 7.3 Output Hold Requirement
-
-When output-valid is asserted but the receiver is not ready to accept the result:
-
-- the output value (and any related output-sideband signals, if present) must remain stable,
-- output-valid must remain asserted until the result is accepted.
-
-This ensures the environment can throttle output consumption without losing correctness.
-
-### 7.4 Reset Behavior (Conceptual)
-
-If the top-level module has a reset input, then when reset is asserted it must return to a clean idle state:
-
-- cancel any in-progress operation,
-- deassert output-valid (no pending output),
-- after reset is deasserted, allow a fresh operation to be accepted according to the input handshake (optionally immediately, or within one clock cycle depending on surrounding system conventions).
-
-No partial results from operations started before reset may appear after reset is asserted.
+### 7.3 Reset
+When `rst_n=0`, the module must synchronously return to a known idle state within one clock and deassert `out_valid`.
+After reset is released, the module must be ready to accept a new input transaction.
